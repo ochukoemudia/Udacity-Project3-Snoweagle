@@ -207,6 +207,11 @@ jobs:
       - restore_cache:
           keys: [backend-build]
       - run:
+          name: Install dependencies (awscli)
+          command: |
+            apk --no-cache add py-pip
+            pip install awscli
+      - run:
           name: Update dependencies
           command: |
             sudo apt update
