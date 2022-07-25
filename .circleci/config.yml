@@ -206,7 +206,7 @@ jobs:
       - checkout
       - restore_cache:
           keys: [backend-build]
-       - run:
+      - run:
           name: Update dependencies
           command: |
             sudo apt update
