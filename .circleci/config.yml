@@ -363,48 +363,78 @@ jobs:
 
   cloudfront-update:
     docker:
-      - image: amazon/aws-cli
+      - image: circleci/node:13.8.0
     steps:
       - checkout
       - run:
+          name: Install dependencies
+          command: |
+            sudo apt install -y tar gzip curl
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip -qq awscliv2.zip
+            sudo ./aws/install
+      - run:
           name: Update cloudfront distribution
           command: |
+            export OldWorkflowID=$(aws cloudformation list-exports \
+            --query "Exports[?Name==\`WorkflowID\`].Value" \
+            --no-paginate --output text)
             aws cloudformation deploy \
             --template-file .circleci/files/cloudfront.yml \
             --stack-name InitialStack \
-            --parameter-overrides WorkflowID="udapeople-${CIRCLE_WORKFLOW_ID:0:7}" \
+            --parameter-overrides WorkflowID=${CIRCLE_WORKFLOW_ID:0:7} \
             --tags project=udapeople
       - destroy-environment:
           workflow_id: ${CIRCLE_WORKFLOW_ID:0:7}
       - revert-migrations:
           workflow_id: ${CIRCLE_WORKFLOW_ID:0:7}
-      
+          
   cleanup:
     docker:
       - image: amazon/aws-cli
-      # Docker image here
     steps:
-      # Checkout code from git
       - checkout
       - run:
-          name: Cleanup stacks
+          name: Get old stack workflow id and remove stacks
           command: |
-            export OldWorkflowID=$(aws cloudformation list-exports \
-              --query "Exports[?Name==\`Cloudfront-${CIRCLE_WORKFLOW_ID:0:7}\`].Value" \
-              --no-paginate --output text)
-            echo OldWorkflowID=$OldWorkflowID
+            echo <<pipeline.parameters.workflow_id>>
+            export OldWorkflowID=<<pipeline.parameters.workflow_id>>
             export STACKS=$(aws cloudformation list-stacks \
-              --query "StackSummaries[*].StackName" \
-              --stack-status-filter CREATE_COMPLETE --no-paginate --output text)
-            echo $STACKS
+            --query "StackSummaries[*].StackName" \
+            --stack-status-filter CREATE_COMPLETE --no-paginate --output text)
             if [[ "${STACKS[@]}" =~ "${OldWorkflowID}" ]]
             then
+              echo "----------cleaning up stacks------------"
               aws s3 rm "s3://udapeople-${OldWorkflowID}" --recursive
               aws cloudformation delete-stack --stack-name "udapeople-backend-${OldWorkflowID}"
               aws cloudformation delete-stack --stack-name "udapeople-frontend-${OldWorkflowID}"
-            else
-              echo ------------ Cannot cleanup stacks --------------
             fi
+            
+  add-prometheus-node-exporter:
+    docker:
+      - image: python:3.7-alpine3.16
+    steps:
+      - checkout
+      - add_ssh_keys:
+          fingerprints:
+            - 'ab:52:25:68:df:4c:3a:d5:48:18:55:d8:f9:3b:df:de'
+      - run:
+          name: Install dependencies
+          command: |
+            apk add --update aws-cli tar gzip ansible nodejs npm
+      - attach_workspace:
+          at: ~/
+      - run:
+          name: Setup Prometheus Node Exporter
+          command: |
+            cd .circleci/ansible
+            cat inventory.txt
+            ansible-playbook -i inventory.txt node-exporter.yml
+      - destroy-environment:
+          workflow_id: ${CIRCLE_WORKFLOW_ID:0:7}
+      - revert-migrations:
+          workflow_id: ${CIRCLE_WORKFLOW_ID:0:7}
+
             
 
             
@@ -427,11 +457,15 @@ workflows:
           filters:
             branches:
               only: [master]
-      - configure-infrastructure:
+      - add-prometheus-node-exporter:
           requires: [deploy-infrastructure]
-          filters:
-            branches:
-              only: [master]
+      - configure-infrastructure:
+          requires: [add-prometheus-node-exporter]  
+      #- configure-infrastructure:
+      #    requires: [deploy-infrastructure]
+      #    filters:
+      #      branches:
+      #        only: [master]
       - run-migrations:
           requires: [configure-infrastructure]
           filters:
@@ -452,4 +486,4 @@ workflows:
       - cloudfront-update:
           requires: [smoke-test]
       - cleanup:
-          requires: [cloudfront-update]          
+          requires: [cloudfront-update, add-prometheus-node-exporter]
